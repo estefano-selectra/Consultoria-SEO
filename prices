@@ -1,0 +1,295 @@
+{# electricity:1925:logo:id:tariff1, gas:83113:logo:id, dual:7780:logo:id:tariff1
+electricity:0:logo::tariff2 
+electricity:1:tariff1
+electricity:1:tariff3
+electricity:1:tariffhourly
+electricity:1:tariffall
+gas:83113:logo:id:tariff1
+gas:83113:id:tariff1:RL1
+dual:8150:id:tariff1
+dual:8150:id:tariff1:RL2
+electricity:1:tariff1:captionEsto es un ejemplo
+#}
+{# Este template puede llamarse con 3 maneras diferentes:
+
+1. ÍNDICE - Mostrar una oferta específica por posición:
+   Sintaxis: profile:N (entre 0-9)
+   Ejemplo: flat_1per_elec_heating_summer_75m2:0
+   Opcional: añadir proveedor → flat_1per_elec_heating_summer_75m2:2:endesa
+
+2. ID - Mostrar una oferta específica por ID:
+   Sintaxis: profile:ID (donde ID >= 10)
+   Ejemplo: flat_1per_gas_heating_winter_75m2:83101
+
+3. TOP - Mostrar las N mejores ofertas:
+   Sintaxis: profile:topN (donde N es el número de ofertas)
+   Ejemplo: business_electricity_profile_test:top3
+   Opcional: añadir proveedor → business_electricity_profile_test:top3:endesa
+#}
+{% set domain = 'selectra.es' %}
+{% set profile = parameter.0 %}
+{% set price_index = 0 %}
+{% set card_index = 3 %}
+{% set data = custom_template_config() %}
+{% set defaults = {
+    '&site_id': '3',
+    '&energy_type': 'elec',
+    '&client_type': 'domestic',
+    'power':'4'
+} %}
+{% set arguments = data.energy.profiles[profile] ?? {} %}
+
+{% if parameter.0 is  defined %}
+    {% for key, value in defaults %}
+        {% if arguments[key] is not defined %}
+            {% set arguments = arguments|merge({(key): value}) %}
+        {% endif %}
+    {% endfor %}
+{% endif %}
+{% if parameter.1 is not defined %}
+   <p>Parameter.1 no valido</p>
+{% elseif 'top' in parameter.1 %}
+   {% set card_index = (parameter.1|slice(3))  + 0 %}
+   {% set price_index = 0 %}
+{% elseif parameter.1 < 10 %}
+   {% set price_index = 0 %}
+   {% set card_index = 5 %}
+{% elseif parameter.1 >= 10 and 'top' not in parameter.1 %}
+   {% set arguments = arguments|merge({'&offer_ids': parameter.1}) %}
+   {% set card_index = 5 %}
+{% endif %}
+{% if parameter.2 in data.energy.companies|keys %}
+{% set arguments = arguments|merge({'&provider_names':parameter.2}) %}
+{% endif %}
+{% if 'partner' in parameter %}
+{% set arguments = arguments|merge({'filter[partnership_type]':'Partner'}) %}
+{% endif %}
+{% if 'business' in profile %}
+    {% set arguments = arguments|merge({'&client_type': 'business'}) %}
+{% endif %}
+{% set providers = get_providers() %}
+{# Aplicar defaults solo si no existen en arguments #}
+{% if arguments['&energy_type'] != 'gas' %}
+    {% if arguments['&car_base'] is defined %}
+            {% set arguments = arguments|merge({
+                '&tariff_option': '1',
+            }) %}
+        {% elseif arguments['&car_base'] is not defined and arguments['&car_hn'] is not defined %}
+            {% set arguments = arguments|merge({
+                '&tariff_option': '2',
+            }) %}
+        {% elseif arguments['&car_base'] is not defined and arguments['&car_hn'] is defined %}
+            {% set arguments = arguments|merge({
+                    '&tariff_option': '3',
+                }) %}
+        {% endif %}
+        {% if arguments['&tariff_option'] == '1' and arguments['&energy_type'] != 'gas' %}
+            {% set arguments = arguments|merge({
+                '&car_base': '270',
+            }) %}
+        {% endif %}
+    {% endif %}
+{# Solo calcular consumos si NO están definidos en el perfil #}
+{% if arguments['&tariff_option'] == '2' and arguments['&energy_type'] != 'gas'  %}
+    {# Tarifa 2 periodos: solo añadir si faltan #}
+    {% if arguments['&car_hp'] is not defined and arguments['&car_hc'] is not defined %}
+        {% if arguments['power'] is defined %}
+            {% set carbase = arguments['power'] * 100 %}
+            {% set arguments = arguments|merge({
+                '&car_hp': (carbase * 0.30)|round(2),
+                '&car_hc': (carbase * 0.70)|round(2)
+            }) %}
+        {% endif %}
+    {% endif %}
+{% elseif arguments['&tariff_option'] == '3' and 'gas' not in profile %}
+    {# Tarifa 3 periodos: solo añadir si faltan #}
+    {% if arguments['&car_hp'] is not defined and arguments['&car_hc'] is not defined and arguments['&car_hn'] is not defined %}
+        {% if arguments['power'] is defined %}
+            {% set carbase = arguments['power'] * 100 %}
+            {% set arguments = arguments|merge({
+                '&car_hp': (carbase * 0.25)|round(2),
+                '&car_hc': (carbase * 0.49)|round(2),
+                '&car_hn': (carbase * 0.26)|round(2)
+            }) %}
+        {% endif %}
+    {% endif %}
+{% endif %}
+{% if 'solar' in profile %}
+    {% set arguments = arguments|merge({'&solar': '1'}) %}
+{% endif %}
+
+{% set url_params = [] %}
+{% for key, value in arguments %}
+    {% set clean_key = key starts with '&' ? key|slice(1) : key %}
+    {% set url_params = url_params|merge([clean_key ~ '=' ~ value]) %}
+{% endfor %}
+{% set is_electricity = 'elec' in profile or 'electricity' in profile or arguments['&energy_type'] == 'elec' %}
+
+{% set query_string = url_params|join('&') %}
+
+{% set RL = 'RL' ~ (arguments['&gas_option'] ?? '2') %}
+{# Hacer la llamada a la API #}
+{% set result = api_complete_request('GET', 'https://energy-core.app.production.aws.selectra.io/api/engine?' ~ query_string) %}
+
+{# Definir variables para la presentación - DESPUÉS de la API #}
+{% set currentMonth = "now"|date("n") %}
+{% set gas_monthly_estimate = [1700,1500,1400,800,500,232,200,200,200,600,1100,1800] %}
+{% set gas_consumption = gas_monthly_estimate[(currentMonth-1)] %}
+
+{% set carbase = arguments['&car_base'] ?? ((arguments['&car_hp'] ?? 0) + (arguments['&car_hc'] ?? 0) + (arguments['&car_hn'] ?? 0)) %}
+{% set cargas = arguments['&car_gas'] ?? gas_consumption %}
+{% set consumption = arguments['&energy_type'] == 'elec' ? carbase : cargas %}
+
+{% set elec_tarrif_title = arguments['&tariff_option'] == '1' ? ' de un solo precio': (arguments['&tariff_option'] == '2' ? ' de dos precios' : ' con discriminación horaria') %}
+{% set gas_tarrif_title = arguments['&gas_option'] == '2' ? ' RL2': ' RL1' %}
+
+{# ===================================================================== presentación ===================================================================== #}
+
+{% if result.data.0 %}
+
+	{% set companies = data.energy.companies %}
+    {% set options = ["indexed","green","partner","online","fixed","direct_debit","mandatory_digital_bill","carbon_offset","maintenance", "solar"] %}
+    {% set caption = '' %}
+    {% for item in parameter %}
+        {% set caption = 'caption' in item ? item|replace({'caption': ''}) : caption %}
+    {% endfor %}
+    
+    {% set table_titles = {
+        'elec': "Top "~card_index~" de tarifas de luz"~elec_tarrif_title,
+        'electricity': "Top "~card_index~" de tarifas de luz"~elec_tarrif_title,
+        'gas': "Top "~card_index~" de ofertas de gas"~gas_tarrif_title,
+        'dual': "Top "~card_index~" de ofertas duales"
+    }%}
+    
+  <div class="table--swap">
+    <table class="table">
+    	   <caption class="table__title">{{ caption != '' ? caption : table_titles[arguments['&energy_type']] }}</caption>
+    	<thead>
+        	<tr>
+            	{% if 'logo' in parameter %}
+                	<th>Compañía</th>
+                {% endif %}
+                <th>Oferta</th>
+                <th>Estimación mensual</th>
+                {% if 'details' in parameter %}
+                  <th>Término fijo</th>
+                  <th>Término de consumo</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+        	{% for offer in result.data|slice(price_index, card_index) %}
+              <tr>
+                {% if 'logo' in parameter %}
+                  {% set image = "/common/es-en-assets/logos/"~offer.provider_slug~"-xs.png" %}
+                	<th><img src={{ image }} alt="Tarifa {{offer.offer_name}} de {{offer.provider_name}}" class="u-img--fluid lazy-load"></th>
+                {% endif %}
+                <th>{{offer.provider_name}} {{offer.offer_name}}</th>
+                <td>
+          			{% if arguments['&energy_type'] == 'gas' %}
+                       {% if RL == 'RL1' %}
+                          {{ ((offer.consumption_price.RL1 * 200) + offer.gas_subscription_price)|number_format(2, ',', '.') }} €/mes    
+                      {% else %}
+                          {{ ((offer.consumption_price.RL2 * gas_consumption) + offer.gas_subscription_price)|number_format(2, ',', '.') }} €/mes
+                          {{offer.consumption_price.RL2}}
+                      {% endif %}                    
+          			{% elseif arguments['&energy_type'] == 'dual' %}  
+                      Luz: {{ offer.total_invoice_price_without_taxes|number_format(2, ",", ".") }} €/mes <br>
+                      {% if RL == 'RL1' %}
+                          Gas: {{ ((offer.consumption_price.RL1 * 200) + offer.gas_subscription_price)|number_format(2, ',', '.') }} €/mes    
+                      {% else %}
+                          Gas: {{ ((offer.consumption_price.RL2 * gas_consumption) + offer.gas_subscription_price)|number_format(2, ',', '.') }} €/mes
+                      {% endif %}                              
+          			{% else %}
+                        {{ offer.total_invoice_price_without_taxes|number_format(2, ",", ".")  }} €/mes
+                    {% endif %}                    
+                </td>
+                {% if 'details' in parameter%}
+                	<td>
+                    {% set gas_prices = offer.monthly_subscription_price %}
+                    {% set prices = offer.subscription_price|first %}
+        			{% if arguments['&energy_type'] == 'gas'  %}
+                        {{ offer.monthly_subscription_price[RL]|number_format(2, ',', '.') }} €/mes     	                                             
+                    {% elseif 'dual' in profile %} 
+                    
+                        <span class="nowrap">P1:  {{ prices.high }}  €/kW día</span><br>
+                        <span class="nowrap">P2:  {{ prices.low }} €/kW día</span><br>
+                      <hr>
+                    	<span class="nowrap"> {{ RL }}: {{ offer.monthly_subscription_price[RL]|number_format(2, ',', '.') }}  €/mes</span><br>        
+                    {% else %}
+                    	P1: {{ prices.high }} €/kW día <br>
+                      P2: {{ prices.low  }} €/kW día                               
+                	{% endif %}
+                </td>
+                <td>
+                {% set consumption_price = offer.consumption_price|first %}
+                	{%  if arguments['&energy_type'] == 'gas' %}
+                      {{ offer.consumption_price[RL]|number_format(4, ",", ".") }} €/kWh <br>
+                    {% elseif arguments['&energy_type'] == 'dual' %} 
+                                {% if offer.price_elec_base is defined and offer.price_elec_base != "-" %}
+                                    Fijo: <span class="nowrap">{{offer.price_elec_base|number_format(4, ",", ".") }} €/kWh</span><br>
+                                {% endif %}
+                                {% if offer.price_elec_hp is defined and offer.price_elec_hp != "-" %}
+                                    Punta: <span class="nowrap">{{offer.price_elec_hp|number_format(4, ",", ".") }} €/kWh</span><br>
+                                {% endif %}
+                                {% if offer.price_elec_hc is defined and offer.price_elec_hc != "-" %}
+                                    Valle: <span class="nowrap">{{offer.price_elec_hc|number_format(4, ",", ".") }} €/kWh</span><br>
+                                {% endif %}
+                                {% if offer.price_elec_hn is defined and offer.price_elec_hn != "-" %}
+                                    Llano: <span class="nowrap">{{offer.price_elec_hn|number_format(4, ",", ".") }} €/kWh</span><br>
+                                {% endif %}                      
+                      <hr>
+                   		<span class="nowrap">{{ RL }}: {{offer.consumption_price[RL]|number_format(4, ",", ".")}} €/kWh</span><br>
+                    {% else %}
+                                {% if consumption_price.base is defined %}
+                                    <span class="nowrap">{{consumption_price.base|number_format(4, ",", ".") }} €/kWh</span><br>
+                                {% endif %}
+
+                                {% if consumption_price.high is defined %}
+                                    <span class="nowrap">Punta: {{consumption_price.high|number_format(4, ",", ".") }} €/kWh</span><br>
+                                {% endif %}
+
+                                {% if consumption_price.low is defined %}
+                                    <span class="nowrap">Valle: {{consumption_price.low|number_format(4, ",", ".") }} €/kWh</span><br>
+                                {% endif %}
+
+                                {% if consumption_price.medium is defined %}
+                                    <span class="nowrap">Llano: {{consumption_price.medium|number_format(4, ",", ".") }} €/kWh</span>
+                                {% endif %}                                             
+               			{% endif %}
+               </td>
+                {% endif %}
+              </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+  </div>
+  
+<p class="table__legend">
+    {% set translations = {
+        '{potencia}': arguments['power'] ?? arguments['&power'] ?? 4,
+        '{base}': arguments['&car_base'] ?? carbase,
+        '{punta}': arguments['&car_hp'] ?? 0,
+        '{valle}': arguments['&car_hc'] ?? 0,
+        '{llano}': arguments['&car_hn'] ?? 0,
+        '{consumo_total}': consumption,
+        '{tipo_gas}': RL,
+        '{consumo_gas}': cargas
+    }%}
+    
+    {% if arguments['&energy_type'] == 'dual' %}
+        Estimación calculada para un consumo de {{ carbase }} kWh de luz, con una potencia de {{ arguments['power'] ?? arguments['&power'] ?? 4 }} kW y {{ cargas }} kWh de gas. Impuestos no incluidos.
+    {% else %}
+        {% if arguments['&tariff_option'] == '1' %}
+            {{ 'ct_top_elec1'|t|replace(translations) }}
+        {% elseif arguments['&tariff_option'] == '2' %}
+            {{ 'ct_top_elec2'|t|replace(translations) }}
+        {% elseif arguments['&tariff_option'] == '3' %}
+            {{ 'ct_top_elec3'|t|replace(translations) }}
+        {% endif %}
+        {% if arguments['&energy_type'] == 'gas' %}
+            {{ 'ct_top_gas'|t|replace(translations) }}
+        {% endif %}
+    {% endif %}
+</p> 
+{% endif %}
